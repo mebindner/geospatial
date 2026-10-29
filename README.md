@@ -30,4 +30,8 @@ README.md        data, method and limitations
 
 ## License
 
-Code: MIT. Data belongs to the sources named in each project and keeps their licences.
+- **Code:** [MIT](LICENSE).
+- **Images and videos** in `output/` folders: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). You may share and adapt them, including commercially, as long as you credit Martin Eckberg Bindner and link to this repository.
+- **Data** belongs to the sources named in each project and keeps their licences.
+
+If you use this in your own work, a link back is appreciated.
