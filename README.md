@@ -6,7 +6,7 @@ Code is in R or Python, chosen per task.
 
 | # | Project | Folder | Status |
 |---|---------|--------|--------|
-| 2 | Norway's fjords in 3D with sea lice on top | [`02-fjorde-lakselus/`](02-fjorde-lakselus/) | Done: Sognefjord 2026, weeks 18–42 |
+| 2 | Norway's fjords in 3D with sea lice on top | [`02-fjords-sea-lice/`](02-fjords-sea-lice/) | Done: Sognefjord 2026, weeks 18–42 |
 | 1 | Denmark at +1 and +2 metres of sea level rise | – | Planned |
 | 3 | How far does public money travel? | – | Planned |
 | 4 | Denmark from space: greener or greyer? | – | Planned |

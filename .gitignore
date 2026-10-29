@@ -1,14 +1,14 @@
-# Data-cache (hentes igen fra Kartverket / BarentsWatch)
+# Data cache (downloaded again from Kartverket / BarentsWatch)
 **/data/raw/*
 **/data/processed/*
 !**/data/**/.gitkeep
 
-# Renderede frames og video (genskabes med koer.R); slutbilledet committes til README
+# Rendered frames and video (recreated with run.R); final still is committed for the README
 **/output/*
 !**/output/.gitkeep
-!**/output/*_slut.png
+!**/output/*_final.png
 
-# Intern planlægning
+# Internal planning notes
 geospatial-spor.md
 
 # R / RStudio / Positron
@@ -28,5 +28,5 @@ __pycache__/
 .idea/
 .DS_Store
 
-# Lokal Claude Code-opsætning
+# Local Claude Code settings
 .claude/
