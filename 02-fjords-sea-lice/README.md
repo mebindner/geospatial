@@ -4,6 +4,8 @@ A 3D video of the outer Sognefjord where every salmon farm is a bar. Height and 
 
 ![Sognefjord, week 42 2026](output/sognefjord_2026_final.png)
 
+https://github.com/user-attachments/assets/49daf353-767c-43c3-a8a0-9a626ab44623
+
 In week 42 the average across reporting farms was 0.34 adult female lice per fish. Three farms were above Norway's 0.5 limit, and all three sit at the mouth of the fjord.
 
 ## Run
