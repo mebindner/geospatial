@@ -4,6 +4,8 @@ Maps and spatial analysis built from open data, one project at a time. Each proj
 
 Code is in R or Python, chosen per task.
 
+Developed with AI-assisted coding (Claude). Problem framing, methodology, validation and all design decisions are my own.
+
 | # | Project | Folder | Status |
 |---|---------|--------|--------|
 | 2 | Norway's fjords in 3D with sea lice on top | [`02-fjords-sea-lice/`](02-fjords-sea-lice/) | Done: Sognefjord 2026, weeks 18–42 |
