@@ -25,7 +25,7 @@ Open `Geospatial.Rproj` and run [run.R](run.R). Each stage caches its result in 
 2. **Summits.** Every named OpenStreetMap summit with an elevation of at least 1,000 m: 4,869 candidates, of which 8 were excluded because their OSM elevation disagrees with the terrain by more than plausible.
 3. **Visibility.** For each summit, a viewshed from 1.7 m above the summit (eye height), with Earth curvature and standard atmospheric refraction (GDAL, `curvcoef = 6/7`), out to 350 km. Because a grid cell holds the average height of its area, the observer is lifted from the cell to the true summit height.
 4. **Three resolutions.** All summits are screened at 500 m. The best 40 distinct summits (one per 3 km) are re-ranked at 200 m. The top 5, and Galdhøpiggen for comparison, are computed at 100 m.
-5. **Video.** The 100 m visibility layer, aggregated exactly to a 400 m scene grid, on top of Sentinel-2 cloudless imagery and the terrain in 3D (rayshader). The on-screen counter adds up visible area by distance and ends exactly on the 100 m result.
+5. **Video.** The 100 m visibility layer, aggregated exactly to a 400 m scene grid, on top of Sentinel-2 cloudless imagery and the terrain in 3D (rayshader), in 4:5 format for mobile feeds. The camera starts low over the summit and pulls back as the visible land is revealed outwards. The on-screen counter adds up visible area by distance and ends exactly on the 100 m result. Landmarks (Rondslottet 88 km, Snøhetta 127 km, Storsylen 131 km) are only labelled if the 100 m layer confirms they are visible, and a sight line marks the furthest visible land (187 km, near Rankonøse).
 
 ## Checks
 
@@ -34,7 +34,8 @@ Open `Geospatial.Rproj` and run [run.R](run.R). Each stage caches its result in 
 | Viewshed on a flat plane vs. the theoretical horizon (with refraction) | 1,000 m eye: 122.7 km vs 121.9 km. 2,000 m: 173.2 km vs 172.4 km. Both within one cell |
 | Same winner at 500 m and 200 m | Yes |
 | Rank agreement 500 m vs 200 m (top 40) | Spearman 0.83, top 10 overlap 9/10 |
-| Visible land inside the video frame, all frames | 100% (the check was verified to fail on a deliberately cropped camera) |
+| Revealed visible land inside the video frame, every frame | 100% (the check was verified to fail on a deliberately cropped camera) |
+| Labelled points (summit, landmarks, furthest point) away from the frame edge | Closest is 8% from an edge (minimum 6%) |
 
 ## Results depend on resolution, the ranking does not
 
@@ -46,6 +47,10 @@ Visible areas shrink as the terrain gets more detailed, because finer terrain hi
 | Galdhøpiggen | 4,106 km² | – | 2,392 km² |
 
 The steps get smaller (−17%, then −10%), so the numbers are converging but not final; at 10 m they would be lower still. The **ranking** is what the analysis supports: the same winner at every resolution, and Galdhøpiggen falls faster than the winner as detail increases, so the comparison only gets stronger. Galdhøpiggen ranked 56th of 2,807 distinct summits in the 500 m screening; that rank is not recomputed at 100 m.
+
+## What the picture shows, and a correction
+
+Far from the summit, visible land comes in thin slivers: ridges and upper slopes that cover only part of a 400 m scene cell. An early version of the video scaled the gold by the visible fraction and dimmed cells less than half visible, which drew 536 km² (8.8%) of the visible land as if it were hidden. The counter was right; the picture understated the distant view. Now every cell with any visible land glows (at least 45% strength, more where more of the cell is visible), and only cells with no visible land are dimmed. The edges of the scene are dark because nothing is visible there: only 41 km² (0.7%) of the visible land lies more than 150 km away.
 
 ## Limitations
 

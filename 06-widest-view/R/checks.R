@@ -45,32 +45,70 @@ flag_bad_elevations <- function(peaks, max_above = 700, max_below = 50) {
 #'
 #' The counter on screen adds up every visible cell. If the camera crops some of
 #' them out, the picture shows less than the number claims (the lesson from the
-#' fjord project). Every visible cell is projected to window coordinates for
-#' frames across the video, weighted by its visible area.
+#' fjord project). For each checked frame, only the land revealed so far (inside
+#' the current ring) is tested, since the camera deliberately starts close and
+#' pulls back as the ring grows. Cells are weighted by their visible area.
 #'
-#' @return Invisibly, the largest share of visible area outside the frame.
-check_frame_coverage <- function(scene, exaggeration = 4, n = 450, every = 25, size = 1080) {
+#' Timeline arguments must match make_video().
+#' @return Invisibly, the largest share of revealed visible area outside the frame.
+check_frame_coverage <- function(scene, exaggeration = 4, intro_s = 2, reveal_s = 9, hold_s = 7,
+                                 fps = 25, every = 10, size = 1080) {
   zscale <- scene$res_m / exaggeration
   idx <- which(scene$frac > 0, arr.ind = TRUE)            # row = north-south, col = west-east
   w   <- scene$frac[idx]
+  d   <- scene$dist[idx]
   x   <- idx[, "col"] - 0.5 - ncol(scene$frac) / 2        # scene x runs west-east
   z   <- idx[, "row"] - 0.5 - nrow(scene$frac) / 2        # scene z runs north-south
   y   <- scene$m[cbind(idx[, "col"], idx[, "row"])] / zscale
 
+  n_intro <- intro_s * fps; n_reveal <- reveal_s * fps
+  n <- n_intro + n_reveal + hold_s * fps
+  max_radius <- max(d)
+
   base <- scene$rgb; base[is.na(base)] <- 0
   rayshader::plot_3d(base, scene$m, zscale = zscale, windowsize = c(size, size), shadow = FALSE)
   worst <- 0
-  for (i in seq(1, n, by = every)) {
-    cam <- camera_at(i, n)
-    rayshader::render_camera(theta = cam$theta, phi = cam$phi, zoom = cam$zoom, fov = 35)
-    win <- rgl::rgl.user2window(x, y, z)
+  for (i in seq(n_intro + 1, n, by = every)) {
+    cam <- camera_at(i, n_intro, n_reveal, n)
+    rayshader::render_camera(theta = cam$theta, phi = cam$phi, zoom = cam$zoom, fov = cam$fov)
+    shown <- d <= max_radius * reveal_progress(i, n_intro, n_reveal)
+    if (!any(shown)) next
+    win <- rgl::rgl.user2window(x[shown], y[shown], z[shown])
     outside <- win[, 1] < 0 | win[, 1] > 1 | win[, 2] < 0 | win[, 2] > 1
-    worst <- max(worst, sum(w[outside]) / sum(w))
+    worst <- max(worst, sum(w[shown][outside]) / sum(w[shown]))
   }
   rgl::close3d()
   message(sprintf("Frame coverage: at most %.2f%% of the visible area falls outside the frame -> %s",
                   100 * worst, if (worst < 0.001) "OK" else "CHECK"))
   invisible(worst)
+}
+
+#' Check 5: labelled points need room for their labels
+#'
+#' The coverage check only asks whether land is inside the frame. A labelled
+#' point at the very edge passes it, but its label is cut off. This checks the
+#' summit, the landmarks and the furthest visible point in the final (hold) view,
+#' where they are labelled, against a margin from every edge.
+#'
+#' @param points Tibble with x, y (EPSG:25833) and ele.
+check_points_in_frame <- function(scene, points, exaggeration = 4, intro_s = 2, reveal_s = 9, hold_s = 7,
+                                  fps = 25, margin = 0.06, size = 1080) {
+  zscale <- scene$res_m / exaggeration
+  n_intro <- intro_s * fps; n_reveal <- reveal_s * fps; n <- n_intro + n_reveal + hold_s * fps
+  base <- scene$rgb; base[is.na(base)] <- 0
+  rayshader::plot_3d(base, scene$m, zscale = zscale, windowsize = c(size, size), shadow = FALSE)
+  worst <- 1
+  for (i in c(n_intro + n_reveal + 1, n)) {            # start and end of the hold
+    cam <- camera_at(i, n_intro, n_reveal, n)
+    rayshader::render_camera(theta = cam$theta, phi = cam$phi, zoom = cam$zoom, fov = cam$fov)
+    xz  <- purrr::map2(points$x, points$y, \(x, y) scene_point(scene, x, y))
+    win <- rgl::rgl.user2window(purrr::map_dbl(xz, "x"), points$ele / zscale, purrr::map_dbl(xz, "z"))
+    worst <- min(worst, win[, 1], 1 - win[, 1], win[, 2], 1 - win[, 2])
+  }
+  rgl::close3d()
+  message(sprintf("Labelled points: closest is %.1f%% from an edge (need %.0f%%) -> %s",
+                  100 * worst, 100 * margin, if (worst >= margin) "OK" else "CHECK"))
+  invisible(worst >= margin)
 }
 
 #' Check 3a: rank agreement between two resolutions (Spearman's rho, top-n overlap)

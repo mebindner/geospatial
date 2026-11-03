@@ -2,28 +2,53 @@
 # Video: the visible land lights up outwards from the winning summit
 # -----------------------------------------------------------------------------
 # Timeline (about 18 s, built for LinkedIn where most viewers leave early):
-#   0-2 s   hook and winner on screen over the 3D landscape
-#   2-11 s  reveal: a ring moves outwards and visible land glows gold;
-#           the counter adds up the visible area
+#   0-2 s   close and low over the summit, hook already on screen
+#   2-11 s  reveal: a ring moves outwards, visible land glows gold, the camera
+#           pulls up and back at the same pace, landmarks appear as the ring
+#           reaches them, and a sight line marks the furthest land in view
 #   11-18 s hold on the full result; the ranking panel fades in
+#
+# Format 4:5 (1080 x 1350): the 3D scene is square and the text lives in bands
+# above and below it, so nothing covers the landscape.
 # =============================================================================
 
-#' Camera for frame i: a slow orbit around the summit, the same in every phase
-#' so the eye can follow the reveal without the view jumping.
-camera_at <- function(i, n) {
-  t <- (i - 1) / max(n - 1, 1)
-  list(theta = 20 + 25 * t, phi = 38 - 4 * t, zoom = 0.62 - 0.04 * t)
+VIDEO_W  <- 1080
+VIDEO_H  <- 1350
+SCENE_Y0 <- 70      # top of the square scene on the 4:5 canvas; the hook sits on a
+                    # gradient over the scene's empty sky
+
+#' Reveal progress (0-1) for frame i: eases in and out so the ring starts and lands gently
+reveal_progress <- function(i, n_intro, n_reveal) {
+  t <- min(max((i - n_intro) / n_reveal, 0), 1)
+  (1 - cos(pi * t)) / 2
+}
+
+#' Camera for frame i
+#'
+#' Starts low and close over the summit (the scene is centred on it, so the
+#' orbit centre is the summit) and pulls up and out in step with the reveal, so
+#' the revealed land always fits the frame. check_frame_coverage() verifies this.
+camera_at <- function(i, n_intro, n_reveal, n) {
+  p <- reveal_progress(i, n_intro, n_reveal)
+  drift <- (i - 1) / max(n - 1, 1)              # slow orbit through the whole video
+  list(theta = 200 + 25 * p + 8 * drift,
+       phi   = 16 + 20 * p,
+       zoom  = 0.18 + 0.56 * p,
+       fov   = 45 - 10 * p)
 }
 
 #' Render the video for the winning summit
 #'
 #' @param winner One row of the stage 3 result.
 #' @param ranking Tibble for the end panel (see annotate_frame()).
-#' @param hook Two text lines shown from the first frame.
+#' @param hook Up to three text lines shown from the first frame.
+#' @param landmarks Tibble (name, x, y, ele, dist_km) of named summits in view,
+#'   labelled when the ring reaches them.
+#' @param furthest list(x, y, ele, dist_km, near) for the sight line.
 #' @param exaggeration Vertical exaggeration of the terrain (stated on screen).
 #' @param only_frames Frame numbers to render for a quick check.
-make_video <- function(winner, ranking, hook, exaggeration = 4,
-                       intro_s = 2, reveal_s = 9, hold_s = 7, fps = 25, size = 1080,
+make_video <- function(winner, ranking, hook, landmarks, furthest, exaggeration = 4,
+                       intro_s = 2, reveal_s = 9, hold_s = 7, fps = 25,
                        only_frames = NULL) {
   key   <- paste0("peak_", winner$osm_id)
   scene <- build_scene(winner, key)
@@ -38,39 +63,50 @@ make_video <- function(winner, ranking, hook, exaggeration = 4,
   max_radius <- max(scene$dist[scene$frac > 0])
   final_area <- winner$area_100m
 
-  # Summit marker in scene coordinates; the eye height is exaggerated with the terrain
-  p  <- scene_point(scene, scene$xy[1], scene$xy[2])
-  sy <- winner$ele / zscale
+  # Points of interest in scene coordinates (y = height in scene units)
+  to_scene <- function(x, y, ele) { p <- scene_point(scene, x, y); c(p[["x"]], ele / zscale, p[["z"]]) }
+  summit3d   <- to_scene(scene$xy[1], scene$xy[2], winner$ele)
+  furthest3d <- to_scene(furthest$x, furthest$y, furthest$ele)
+  marks3d    <- purrr::pmap(landmarks[, c("x", "y", "ele")], to_scene)
 
   frame_list <- if (is.null(only_frames)) seq_len(n) else only_frames
   for (i in frame_list) {
-    # Reveal radius eases in and out so the ring starts and lands gently
-    t <- min(max((i - n_intro) / n_reveal, 0), 1)
-    radius <- max_radius * (1 - cos(pi * t)) / 2
+    p <- reveal_progress(i, n_intro, n_reveal)
+    radius  <- max_radius * p
     in_hold <- i > n_intro + n_reveal
 
     tex <- reveal_texture(base, scene, radius, ring = !in_hold && radius > 0)
-    rayshader::plot_3d(tex, scene$m, zscale = zscale, windowsize = c(size, size),
+    rayshader::plot_3d(tex, scene$m, zscale = zscale, windowsize = c(VIDEO_W, VIDEO_W),
                        solid = TRUE, soliddepth = -40, solidcolor = BACKGROUND, solidlinecolor = BACKGROUND,
                        shadow = FALSE, background = BACKGROUND)
-    cam <- camera_at(i, n)
-    rayshader::render_camera(theta = cam$theta, phi = cam$phi, zoom = cam$zoom, fov = 35)
+    cam <- camera_at(i, n_intro, n_reveal, n)
+    rayshader::render_camera(theta = cam$theta, phi = cam$phi, zoom = cam$zoom, fov = cam$fov)
 
-    # Area revealed so far; at the end exactly the 100 m result
+    # Window positions (0-1, y up) of everything labelled in 2D
+    win <- function(v) rgl::rgl.user2window(v[1], v[2], v[3])[1, 1:2]
+    summit <- list(label = paste0(winner$name, "  ", format(winner$ele, big.mark = ","), " m"), pos = win(summit3d))
+    marks <- purrr::map2(marks3d, seq_len(nrow(landmarks)), function(v, k) {
+      list(label = paste0(landmarks$name[k], "  ", round(landmarks$dist_km[k]), " km"),
+           pos = win(v), alpha = min(max((radius - landmarks$dist_km[k]) / 15, 0), 1))
+    })
+    # Sight line appears once the ring has reached the furthest land, fades in over 1 s
+    sight <- list(from = summit$pos, to = win(furthest3d),
+                  label = paste0("Furthest land in sight: ", round(furthest$dist_km), " km"),
+                  sublabel = paste0("near ", furthest$near),
+                  alpha = if (in_hold) min((i - n_intro - n_reveal) / fps, 1) else 0)
+
     area <- if (in_hold) final_area else {
       ab <- scene$area_by_dist
       idx <- findInterval(radius, ab$dist)
       if (idx == 0) 0 else ab$cum_area[idx] * final_area / max(ab$cum_area)
     }
-    win <- rgl::rgl.user2window(p["x"], sy, p["z"])
-    summit <- list(label = sprintf("%s  %s m", winner$name, format(winner$ele, big.mark = ",")),
-                   px = win[1, 1], py = win[1, 2])
 
     file <- file.path(frames, sprintf("f%04d.png", i))
     rayshader::render_snapshot(file)
-    annotate_frame(file, hook, area, if (in_hold || radius == 0) NULL else radius, summit, ranking,
-                   panel_alpha = if (in_hold) min((i - n_intro - n_reveal) / fps, 1) else 0,
-                   exaggeration = exaggeration, size = size)
+    annotate_frame(file, hook, area, if (in_hold || radius == 0) NULL else radius,
+                   summit, marks, sight, ranking,
+                   panel_alpha = if (in_hold) min((i - n_intro - n_reveal - fps) / fps, 1) else 0,
+                   exaggeration = exaggeration)
     message(sprintf("frame %d/%d", i, n))
   }
   rgl::close3d()

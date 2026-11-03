@@ -86,13 +86,21 @@ base_texture <- function(scene, zscale) {
 
 #' Texture for one frame, with visible land revealed out to `radius_km`
 #'
-#' Inside the radius, visible land glows gold (by its visible fraction) and land
-#' that cannot be seen is dimmed, so the contrast reads at a glance. Outside the
-#' radius the landscape is untouched.
-reveal_texture <- function(base, scene, radius_km, ring = TRUE, glow = 0.72, dim = 0.55) {
+#' Inside the radius, every cell with any visible land glows gold, and only cells
+#' with no visible land at all are dimmed. Outside the radius the landscape is
+#' untouched.
+#'
+#' Far from the summit, visible land comes in thin slivers (ridges, upper slopes)
+#' that cover only part of a 400 m cell. An earlier version scaled the glow by the
+#' visible fraction and dimmed cells under 50% visible, which drew 8.8% of the
+#' visible area as if it were hidden: the counter was right, the picture was not.
+#' A floor of `min_glow` keeps every visible sliver readable; the fraction still
+#' adds brightness where more of the cell is visible.
+reveal_texture <- function(base, scene, radius_km, ring = TRUE, min_glow = 0.45, max_glow = 0.8, dim = 0.55) {
   inside <- scene$dist <= radius_km
-  a <- glow * scene$frac * inside
-  shade <- ifelse(inside & scene$frac < 0.5, dim, 1)
+  seen   <- scene$frac > 0
+  a <- ifelse(seen, min_glow + (max_glow - min_glow) * scene$frac, 0) * inside
+  shade <- ifelse(inside & !seen, dim, 1)
   tex <- base
   for (k in 1:3) tex[, , k] <- (base[, , k] * shade) * (1 - a) + GLOW[k] * a
   if (ring && radius_km > 0) {

@@ -2,19 +2,20 @@
 # Story and video
 # -----------------------------------------------------------------------------
 # Builds the on-screen text from the analysis results and renders the video.
-# Nothing in the text is typed by hand: names, heights and areas all come from
-# `final` and `refs`, so a re-run with new data can never leave stale numbers
-# on screen. Expects `final` and `refs` from run.R.
+# Nothing in the text is typed by hand: names, heights, areas and distances
+# all come from the data, so a re-run can never leave stale numbers on screen.
+# Expects `final`, `refs` and `screen` from run.R.
 # =============================================================================
 
 winner <- final[1, ]
 galdh  <- refs[1, ]
 ratio  <- winner$area_100m / galdh$area_100m
+key    <- paste0("peak_", winner$osm_id)
+xy     <- sf::st_coordinates(winner)[1, ]
 
-# Three short lines rather than one long one, so nothing is cut at 1080 px.
-# Special characters are written as \u escapes: the file then works in any locale.
+# Hook ----------------------------------------------------------------------------
 # paste0() rather than sprintf(): sprintf() converts to the session's native
-# encoding, which turns the multiplication sign into "<c3><97>" outside UTF-8.
+# encoding, which can mangle the multiplication sign outside UTF-8.
 hook <- c(
   "Norway's widest view isn't from its highest summit.",
   paste0("From ", winner$name, " (", format(winner$ele, big.mark = ","), " m) you see ",
@@ -22,8 +23,39 @@ hook <- c(
   paste0("as from ", galdh$name, " (", format(galdh$ele, big.mark = ","), " m), the highest.")
 )
 
-# End panel: the 100 m top 5, plus the highest summit for context (no rank,
-# since its rank comes from the 500 m screening; see the README)
+# Furthest visible land and the nearest named summit to it -------------------------
+visible100 <- terra::rast(path_proc(sprintf("visible_%s_100m.tif", key)))
+dist100    <- terra::distance(terra::rast(visible100), terra::vect(rbind(xy), crs = GRID_CRS))
+far_cell   <- terra::where.max(terra::ifel(visible100, dist100, NA))[1, 2]
+far_xy     <- terra::xyFromCell(visible100, far_cell)
+far_pt     <- sf::st_sfc(sf::st_point(far_xy[1, ]), crs = GRID_CRS)
+nearest    <- screen[which.min(sf::st_distance(screen, far_pt)), ]
+far_ele    <- terra::extract(get_elevation(RANK_RES)$dem, far_xy)[1, 1]
+furthest <- list(
+  x = far_xy[1, 1], y = far_xy[1, 2], ele = far_ele,
+  dist_km = terra::values(dist100)[far_cell] / 1000,
+  near = paste0(nearest$name, " (", format(nearest$ele, big.mark = ","), " m)")
+)
+
+# Landmarks: well-known summits that are actually visible from the winner ---------
+# Checked against the 100 m visibility layer, so a label never claims a view
+# that the analysis does not support.
+landmark_names <- c("Snøhetta", "Rondslottet", "Storsylen")
+landmarks <- screen |>
+  dplyr::filter(name %in% landmark_names) |>
+  dplyr::group_by(name) |> dplyr::slice_max(ele, n = 1, with_ties = FALSE) |> dplyr::ungroup() |>
+  dplyr::mutate(
+    visible = terra::extract(visible100, terra::vect(geometry))[, 2] == 1,
+    dist_km = as.numeric(sf::st_distance(geometry, sf::st_geometry(winner))) / 1000
+  ) |>
+  dplyr::filter(visible %in% TRUE)
+landmarks <- dplyr::bind_cols(sf::st_drop_geometry(landmarks), tibble::as_tibble(sf::st_coordinates(landmarks))) |>
+  dplyr::rename(x = X, y = Y)
+message("Landmarks in view: ", paste(landmarks$name, round(landmarks$dist_km), "km", collapse = ", "))
+
+# End panel -----------------------------------------------------------------------
+# The 100 m top 5, plus the highest summit for context (no rank, since its rank
+# comes from the 500 m screening; see the README)
 ranking <- dplyr::bind_rows(
   sf::st_drop_geometry(final) |>
     dplyr::transmute(rank = dplyr::row_number(), name, ele, area_km2 = area_100m, highlight = rank == 1),
@@ -31,8 +63,16 @@ ranking <- dplyr::bind_rows(
     dplyr::transmute(rank = NA_integer_, name = paste0(name, " (highest)"), ele, area_km2 = area_100m, highlight = FALSE)
 )
 
-# Guard: every visible cell must be inside the frame in every part of the video
-coverage <- check_frame_coverage(build_scene(winner, paste0("peak_", winner$osm_id)))
-if (coverage >= 0.001) stop("Part of the visible land falls outside the frame; adjust camera_at().")
+# Guard and render ----------------------------------------------------------------
+# Every revealed visible cell must be inside the frame in every part of the video
+scene <- build_scene(winner, key)
+coverage <- check_frame_coverage(scene)
+if (coverage >= 0.001) stop("Part of the revealed land falls outside the frame; adjust camera_at().")
+labelled <- dplyr::bind_rows(
+  tibble::tibble(x = xy[1], y = xy[2], ele = winner$ele),
+  tibble::tibble(x = furthest$x, y = furthest$y, ele = furthest$ele),
+  dplyr::select(landmarks, x, y, ele)
+)
+if (!check_points_in_frame(scene, labelled)) stop("A labelled point is too close to the frame edge; adjust camera_at().")
 
-make_video(winner, ranking, hook)
+make_video(winner, ranking, hook, landmarks, furthest)
