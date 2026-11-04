@@ -9,7 +9,7 @@ Developed with AI-assisted coding (Claude). Problem framing, methodology, valida
 | # | Project | Folder | Status |
 |---|---------|--------|--------|
 | 2 | Norway's fjords in 3D with sea lice on top | [`02-fjords-sea-lice/`](02-fjords-sea-lice/) | Done: Sognefjord 2026, weeks 18–42 |
-| 6 | Norway's widest view: which summit sees the most land? | [`06-widest-view/`](06-widest-view/) | Done: Midtre Sølen, 6,124 km² |
+| 6 | Norway's widest view: which summit sees the most land? | [`06-widest-view/`](06-widest-view/) | Done: Midtre Sølen, 6,685 km² of land in sight |
 | 1 | Denmark at +1 and +2 metres of sea level rise | – | Planned |
 | 3 | How far does public money travel? | – | Planned |
 | 4 | Denmark from space: greener or greyer? | – | Planned |

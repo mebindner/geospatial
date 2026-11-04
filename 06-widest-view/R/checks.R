@@ -111,6 +111,57 @@ check_points_in_frame <- function(scene, points, exaggeration = 4, intro_s = 2, 
   invisible(worst >= margin)
 }
 
+#' Check 6: the country shares add up
+#'
+#' Visible land is split into Norway, Sweden and "other" (land outside both,
+#' e.g. a skerry just outside Norway's generalised coastline). Each visible cell
+#' must be in exactly one group, so the parts sum to the total, and nothing may
+#' be counted as both Norwegian and Swedish. "Other" is reported, and must be
+#' small, because the video only names Norway and Sweden.
+#'
+#' @param visible,vis_nor,vis_swe Logical rasters on the same grid.
+#' @param max_other Largest acceptable share of visible land in "other".
+check_country_split <- function(visible, vis_nor, vis_swe, max_other = 0.005) {
+  km2 <- function(r) terra::global(r, "sum", na.rm = TRUE)[[1]] * prod(terra::res(visible)) / 1e6
+  total <- km2(visible); nor <- km2(vis_nor); swe <- km2(vis_swe); both <- km2(vis_nor & vis_swe)
+  other <- total - nor - swe
+  other <- max(other, 0)   # floating-point remainder of a sum that is exactly zero
+  ok <- both == 0 && other / total <= max_other
+  message(sprintf("Country split: total %.0f = Norway %.0f + Sweden %.0f + other %.0f km2 (both: %.0f) -> %s",
+                  total, nor, swe, other, both, if (ok) "OK" else "CHECK"))
+  invisible(ok)
+}
+
+#' Check 7: the map reads north-up
+#'
+#' People read maps with north up and east to the right. Known points are
+#' projected to the screen in the final view: a point east of the summit must
+#' appear to its right, a point north of it must appear above it.
+#'
+#' @param points Tibble with x, y (EPSG:25833) and ele, plus the summit's x, y, ele.
+check_orientation <- function(scene, points, summit, exaggeration = 4, intro_s = 2, reveal_s = 9, hold_s = 7,
+                              fps = 25, size = 1080) {
+  zscale <- scene$res_m / exaggeration
+  n_intro <- intro_s * fps; n_reveal <- reveal_s * fps; n <- n_intro + n_reveal + hold_s * fps
+  base <- scene$rgb; base[is.na(base)] <- 0
+  rayshader::plot_3d(base, scene$m, zscale = zscale, windowsize = c(size, size), shadow = FALSE)
+  cam <- camera_at(n, n_intro, n_reveal, n)
+  rayshader::render_camera(theta = cam$theta, phi = cam$phi, zoom = cam$zoom, fov = cam$fov)
+  proj <- function(x, y, ele) { p <- scene_point(scene, x, y); rgl::rgl.user2window(p[["x"]], ele / zscale, p[["z"]])[1, 1:2] }
+  s <- proj(summit$x, summit$y, summit$ele)
+  ok <- TRUE
+  for (k in seq_len(nrow(points))) {
+    w <- proj(points$x[k], points$y[k], points$ele[k])
+    dx <- points$x[k] - summit$x; dy <- points$y[k] - summit$y
+    # Only test the dominant direction, so a point due north is not judged on x
+    if (abs(dx) > abs(dy) * 0.5 && sign(w[1] - s[1]) != sign(dx)) ok <- FALSE
+    if (abs(dy) > abs(dx) * 0.5 && sign(w[2] - s[2]) != sign(dy)) ok <- FALSE
+  }
+  rgl::close3d()
+  message("Orientation (north up, east right): ", if (ok) "OK" else "CHECK")
+  invisible(ok)
+}
+
 #' Check 3a: rank agreement between two resolutions (Spearman's rho, top-n overlap)
 check_rank_agreement <- function(screen, rank, n = 10) {
   both <- dplyr::inner_join(

@@ -28,10 +28,15 @@ reveal_progress <- function(i, n_intro, n_reveal) {
 #' Starts low and close over the summit (the scene is centred on it, so the
 #' orbit centre is the summit) and pulls up and out in step with the reveal, so
 #' the revealed land always fits the frame. check_frame_coverage() verifies this.
+#'
+#' The camera looks from the south, so the map reads north-up with east to the
+#' right, as on any ordinary map and on the locator. It turns gently into that
+#' position during the reveal and stays there for the hold, where the labels
+#' are read. (An earlier version looked from ~200 degrees, which put south at
+#' the top; positions were right relative to each other but read as wrong.)
 camera_at <- function(i, n_intro, n_reveal, n) {
   p <- reveal_progress(i, n_intro, n_reveal)
-  drift <- (i - 1) / max(n - 1, 1)              # slow orbit through the whole video
-  list(theta = 200 + 25 * p + 8 * drift,
+  list(theta = -12 * (1 - p),
        phi   = 16 + 20 * p,
        zoom  = 0.18 + 0.56 * p,
        fov   = 45 - 10 * p)
@@ -47,16 +52,19 @@ camera_at <- function(i, n_intro, n_reveal, n) {
 #' @param furthest list(x, y, ele, dist_km, near) for the sight line.
 #' @param exaggeration Vertical exaggeration of the terrain (stated on screen).
 #' @param only_frames Frame numbers to render for a quick check.
+#' @param resume Keep frames already on disk and render only the missing ones,
+#'   so an interrupted render can continue instead of starting over.
 make_video <- function(winner, ranking, hook, landmarks, furthest, exaggeration = 4,
                        intro_s = 2, reveal_s = 9, hold_s = 7, fps = 25,
-                       only_frames = NULL) {
+                       only_frames = NULL, resume = FALSE) {
   key   <- paste0("peak_", winner$osm_id)
   scene <- build_scene(winner, key)
   zscale <- scene$res_m / exaggeration
   base  <- base_texture(scene, zscale)
+  locator <- make_locator(scene$xy)
 
   frames <- path_out("frames"); dir.create(frames, recursive = TRUE, showWarnings = FALSE)
-  if (is.null(only_frames)) unlink(file.path(frames, "*.png"))
+  if (is.null(only_frames) && !resume) unlink(file.path(frames, "*.png"))
 
   n_intro <- intro_s * fps; n_reveal <- reveal_s * fps; n_hold <- hold_s * fps
   n <- n_intro + n_reveal + n_hold
@@ -70,6 +78,7 @@ make_video <- function(winner, ranking, hook, landmarks, furthest, exaggeration 
   marks3d    <- purrr::pmap(landmarks[, c("x", "y", "ele")], to_scene)
 
   frame_list <- if (is.null(only_frames)) seq_len(n) else only_frames
+  if (resume) frame_list <- frame_list[!file.exists(file.path(frames, sprintf("f%04d.png", frame_list)))]
   for (i in frame_list) {
     p <- reveal_progress(i, n_intro, n_reveal)
     radius  <- max_radius * p
@@ -86,7 +95,9 @@ make_video <- function(winner, ranking, hook, landmarks, furthest, exaggeration 
     win <- function(v) rgl::rgl.user2window(v[1], v[2], v[3])[1, 1:2]
     summit <- list(label = paste0(winner$name, "  ", format(winner$ele, big.mark = ","), " m"), pos = win(summit3d))
     marks <- purrr::map2(marks3d, seq_len(nrow(landmarks)), function(v, k) {
-      list(label = paste0(landmarks$name[k], "  ", round(landmarks$dist_km[k]), " km"),
+      country <- switch(landmarks$country[k], Norway = "", border = " (on the border)",
+                        paste0(" (", landmarks$country[k], ")"))
+      list(label = paste0(landmarks$name[k], country, "  ", round(landmarks$dist_km[k]), " km"),
            pos = win(v), alpha = min(max((radius - landmarks$dist_km[k]) / 15, 0), 1))
     })
     # Sight line appears once the ring has reached the furthest land, fades in over 1 s
@@ -95,21 +106,24 @@ make_video <- function(winner, ranking, hook, landmarks, furthest, exaggeration 
                   sublabel = paste0("near ", furthest$near),
                   alpha = if (in_hold) min((i - n_intro - n_reveal) / fps, 1) else 0)
 
-    area <- if (in_hold) final_area else {
-      ab <- scene$area_by_dist
-      idx <- findInterval(radius, ab$dist)
-      if (idx == 0) 0 else ab$cum_area[idx] * final_area / max(ab$cum_area)
-    }
+    # Area revealed so far, in total and in Sweden; at the end exactly the 100 m result
+    ab  <- scene$area_by_dist
+    idx <- if (in_hold) nrow(ab) else findInterval(radius, ab$dist)
+    area     <- if (idx == 0) 0 else ab$cum_area[idx] * final_area / max(ab$cum_area)
+    area_swe <- if (idx == 0) 0 else ab$cum_area_swe[idx] * final_area / max(ab$cum_area)
 
     file <- file.path(frames, sprintf("f%04d.png", i))
     rayshader::render_snapshot(file)
-    annotate_frame(file, hook, area, if (in_hold || radius == 0) NULL else radius,
+    annotate_frame(file, hook, area, area_swe, if (in_hold || radius == 0) NULL else radius,
                    summit, marks, sight, ranking,
                    panel_alpha = if (in_hold) min((i - n_intro - n_reveal - fps) / fps, 1) else 0,
-                   exaggeration = exaggeration)
+                   exaggeration = exaggeration, locator = locator)
     message(sprintf("frame %d/%d", i, n))
+    # Each frame builds a new scene; closing it frees the memory. Without this
+    # the session grew to ~10 GB and the render slowed to a crawl in swap.
+    rgl::close3d()
+    gc(verbose = FALSE)
   }
-  rgl::close3d()
 
   if (is.null(only_frames)) {
     video <- path_out("widest_view.mp4")

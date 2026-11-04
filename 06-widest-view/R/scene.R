@@ -12,8 +12,10 @@
 # =============================================================================
 
 SCENE_CELLS <- 1200      # longest side of the scene grid; enough detail at 1080 px video
-GLOW        <- c(1.00, 0.80, 0.42)   # warm gold for visible land
+GLOW        <- c(1.00, 0.80, 0.42)   # warm gold for visible land in Norway
+GLOW_SWE    <- c(0.56, 0.82, 1.00)   # light blue for visible land in Sweden
 RING        <- c(1.00, 0.95, 0.85)   # thin light ring at the current reveal distance
+BORDER      <- c(0.95, 0.95, 0.95)   # national border line
 
 #' Scene grid around everything the summit can see
 #'
@@ -48,6 +50,34 @@ build_scene <- function(winner, key) {
     terra::aggregate(fact = res_m / 100, fun = "mean") |>
     terra::resample(tmpl, method = "near")
 
+  # Visible land in Sweden = not Norwegian land (the analysis's own mask) and
+  # inside Sweden's border. The two border datasets disagree by up to a few
+  # hundred metres, so Sweden's polygon is widened by 2 km on its side; together
+  # with "not Norwegian" this means no cell can count as both countries.
+  norway100 <- terra::rast(path_proc(sprintf("land_%s_100m.tif", key))) |>
+    terra::resample(visible100, method = "near")
+  swe_buf <- terra::buffer(terra::simplifyGeom(sweden_boundary(), 500), 2000)
+  in_swe  <- terra::rasterize(swe_buf, visible100, touches = FALSE)
+  vis_nor <- visible100 & (norway100 == 1)
+  vis_swe <- visible100 & !(norway100 == 1) & !is.na(in_swe)
+  split_ok <- check_country_split(visible100, vis_nor, vis_swe)
+  if (!split_ok) stop("Norwegian and Swedish shares do not add up; see check_country_split().")
+  frac_swe <- terra::extend(vis_swe, tmpl, fill = 0) |>
+    terra::crop(tmpl) |>
+    (\(r) terra::ifel(is.na(r), 0, r))() |>
+    terra::aggregate(fact = res_m / 100, fun = "mean") |>
+    terra::resample(tmpl, method = "near")
+
+  # The land border to Sweden as a one-cell line on the scene grid. Norway's
+  # polygon outline also contains the whole coastline, so only the part of it
+  # within 3 km of Sweden is kept.
+  near_swe <- terra::buffer(terra::simplifyGeom(sweden_boundary(), 1000), 3000)
+  border <- terra::as.lines(norway_boundary()) |>
+    terra::crop(terra::ext(tmpl)) |>
+    terra::intersect(near_swe) |>
+    terra::rasterize(tmpl, touches = TRUE) |>
+    (\(r) !is.na(r))()
+
   dem  <- terra::resample(get_elevation(RANK_RES)$dem, tmpl, method = "average")
   dem  <- terra::ifel(is.na(dem), 0, dem)
   dist <- terra::distance(tmpl, terra::vect(rbind(xy), crs = GRID_CRS)) / 1000   # km
@@ -58,14 +88,16 @@ build_scene <- function(winner, key) {
     # Plain numbers, not a SpatExtent: terra objects do not survive saveRDS()
     xy = xy, res_m = res_m, ext = as.vector(terra::ext(tmpl)),
     m = rayshader::raster_to_matrix(dem),
-    frac = as_img(frac), dist = as_img(dist),
+    frac = as_img(frac), frac_swe = as_img(frac_swe), border = as_img(border), dist = as_img(dist),
     rgb = terra::as.array(img)[, , 1:3],
     cell_km2 = (res_m / 1000)^2
   )
   # Area revealed within each distance, for the on-screen counter
-  scene$area_by_dist <- tibble::tibble(dist = as.vector(scene$dist), area = as.vector(scene$frac) * scene$cell_km2) |>
+  scene$area_by_dist <- tibble::tibble(dist = as.vector(scene$dist),
+                                       area = as.vector(scene$frac) * scene$cell_km2,
+                                       area_swe = as.vector(scene$frac_swe) * scene$cell_km2) |>
     dplyr::arrange(dist) |>
-    dplyr::mutate(cum_area = cumsum(area))
+    dplyr::mutate(cum_area = cumsum(area), cum_area_swe = cumsum(area_swe))
 
   saveRDS(scene, out)
   scene
@@ -96,13 +128,22 @@ base_texture <- function(scene, zscale) {
 #' visible area as if it were hidden: the counter was right, the picture was not.
 #' A floor of `min_glow` keeps every visible sliver readable; the fraction still
 #' adds brightness where more of the cell is visible.
+#'
+#' Visible land in Sweden is drawn in light blue instead of gold, mixed by the
+#' Swedish share of each cell's visible land, and the national border is drawn
+#' as a thin light line throughout.
 reveal_texture <- function(base, scene, radius_km, ring = TRUE, min_glow = 0.45, max_glow = 0.8, dim = 0.55) {
   inside <- scene$dist <= radius_km
   seen   <- scene$frac > 0
   a <- ifelse(seen, min_glow + (max_glow - min_glow) * scene$frac, 0) * inside
+  swe_share <- ifelse(seen, scene$frac_swe / pmax(scene$frac, 1e-9), 0)
   shade <- ifelse(inside & !seen, dim, 1)
   tex <- base
-  for (k in 1:3) tex[, , k] <- (base[, , k] * shade) * (1 - a) + GLOW[k] * a
+  for (k in 1:3) {
+    glow_k <- GLOW[k] * (1 - swe_share) + GLOW_SWE[k] * swe_share
+    tex[, , k] <- (base[, , k] * shade) * (1 - a) + glow_k * a
+    tex[, , k][scene$border] <- 0.35 * tex[, , k][scene$border] + 0.65 * BORDER[k]
+  }
   if (ring && radius_km > 0) {
     on_ring <- abs(scene$dist - radius_km) < scene$res_m / 1000 * 0.9
     for (k in 1:3) tex[, , k][on_ring] <- 0.4 * tex[, , k][on_ring] + 0.6 * RING[k]

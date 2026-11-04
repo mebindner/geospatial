@@ -1,10 +1,11 @@
 # =============================================================================
 # Visibility analysis
 # -----------------------------------------------------------------------------
-# For each summit: which cells of Norwegian land can a person standing on top
-# see? The answer depends on terrain in between, on the curvature of the Earth
-# and on atmospheric refraction, which bends light slightly downwards and lets
-# you see a little further than pure geometry allows.
+# For each summit in Norway: how much land can a person standing on top see,
+# in any country? The Norwegian share is computed alongside. The answer depends
+# on terrain in between, on the curvature of the Earth and on atmospheric
+# refraction, which bends light slightly downwards and lets you see a little
+# further than pure geometry allows.
 #
 # terra::viewshed() wraps GDAL's viewshed algorithm. Its curvcoef argument
 # combines curvature and refraction; 6/7 (0.857) is the standard value for
@@ -14,10 +15,10 @@
 EYE_HEIGHT  <- 1.7      # metres, a person standing on the summit
 CURV_COEF   <- 6 / 7    # curvature + standard refraction for visible light
 MAX_RANGE_M <- 350000   # search radius. From 2,500 m to a 2,500 m target the
-                        # horizon is ~380 km in theory; beyond 350 km nothing on
-                        # Norwegian land is high enough to be seen in practice.
+                        # horizon is ~380 km in theory; beyond 350 km no land is
+                        # high enough to be seen in practice.
 
-#' Visible Norwegian land from one summit
+#' Visible land from one summit
 #'
 #' The terrain is cropped to a square window around the summit, which makes each
 #' call ~50 times faster than running on the whole country and does not change
@@ -25,13 +26,15 @@ MAX_RANGE_M <- 350000   # search radius. From 2,500 m to a 2,500 m target the
 #'
 #' @param x,y Summit position in EPSG:25833.
 #' @param ele Summit elevation from OSM (metres).
-#' @param dem,norway SpatRasters from get_elevation().
-#' @param keep_raster Return the visibility raster as well (used for the video).
-#' @return list(area_km2, max_dist_km, raster or NULL)
-visible_land <- function(x, y, ele, dem, norway, keep_raster = FALSE) {
+#' @param dem,land,norway SpatRasters from get_elevation().
+#' @param keep_raster Return the rasters as well (used for the video and landmarks).
+#' @return list(area_km2 = all land, area_norway_km2, max_dist_km, and if
+#'   keep_raster: seen = visible land, viewshed = visible terrain of any kind)
+visible_land <- function(x, y, ele, dem, land, norway, keep_raster = FALSE) {
   win  <- terra::ext(x - MAX_RANGE_M, x + MAX_RANGE_M, y - MAX_RANGE_M, y + MAX_RANGE_M)
   d    <- terra::crop(dem, win)
-  land <- terra::crop(norway, win)
+  any_land <- terra::crop(land, win)
+  nor_land <- terra::crop(norway, win)
 
   # A grid cell holds the average height of its area, which is lower than the
   # summit point. Lift the observer by the difference so the eye is at the true
@@ -41,44 +44,62 @@ visible_land <- function(x, y, ele, dem, norway, keep_raster = FALSE) {
 
   vis <- terra::viewshed(d, loc = c(x, y), observer = observer, target = 0,
                          curvcoef = CURV_COEF, output = "yes/no")
-  seen <- vis & (land == 1)
+  seen     <- vis & (any_land == 1)
+  seen_nor <- vis & (nor_land == 1)
 
   # Cell area in km2, and the furthest visible land cell. The distance raster is
   # computed once per window; masking it keeps memory flat even at 100 m.
   cell_km2 <- prod(terra::res(d)) / 1e6
   n_seen   <- terra::global(seen, "sum", na.rm = TRUE)[[1]]
+  n_nor    <- terra::global(seen_nor, "sum", na.rm = TRUE)[[1]]
   dist     <- terra::distance(terra::rast(d), terra::vect(cbind(x, y), crs = GRID_CRS))
   max_dist <- terra::global(terra::ifel(seen, dist, NA), "max", na.rm = TRUE)[[1]] / 1000
   if (is.na(max_dist)) max_dist <- 0
 
-  list(area_km2 = n_seen * cell_km2, max_dist_km = max_dist, raster = if (keep_raster) seen else NULL)
+  list(area_km2 = n_seen * cell_km2, area_norway_km2 = n_nor * cell_km2, max_dist_km = max_dist,
+       seen = if (keep_raster) seen else NULL, viewshed = if (keep_raster) vis else NULL)
 }
 
 #' Run visible_land() for many summits in parallel
 #'
-#' Uses forked workers (macOS/Linux). Each worker re-opens the rasters from
-#' disk, because terra objects cannot be shared across processes.
+#' Uses socket workers (fresh R processes), not forked ones. Forking a session
+#' that has already used GDAL (here: reading the national border) can leave the
+#' children deadlocked on macOS; one run sat idle for 30 minutes that way.
+#' Each worker opens the rasters from disk, because terra objects cannot be
+#' shared across processes.
+#'
+#' Workers are limited by memory, not CPU: a 200 m window is ~12 million cells,
+#' and each worker holds several layers of it. On an 8 GB laptop more than three
+#' workers at 200 m pushes the machine into swap and makes the run slower.
 #'
 #' @param peaks sf points with name, ele.
 #' @param res_m Resolution to compute at.
 #' @param cores Number of worker processes.
 #' @return peaks with area_km2 and max_dist_km added.
-#' Workers are limited by memory, not CPU: a 200 m window is ~12 million cells,
-#' and each worker holds several layers of it. On an 8 GB laptop more than three
-#' workers at 200 m pushes the machine into swap and makes the run slower.
 score_peaks <- function(peaks, res_m, key = "norway",
                         cores = if (res_m >= 500) 6 else 3) {
-  dem_file  <- path_proc(sprintf("dem_%s_%dm.tif", key, res_m))
-  land_file <- path_proc(sprintf("land_%s_%dm.tif", key, res_m))
-  xy <- sf::st_coordinates(peaks)
+  dem_file  <- normalizePath(path_proc(sprintf("dem_%s_%dm.tif", key, res_m)))
+  all_file  <- normalizePath(path_proc(sprintf("landall_%s_%dm.tif", key, res_m)))
+  land_file <- normalizePath(path_proc(sprintf("land_%s_%dm.tif", key, res_m)))
+  jobs <- tibble::tibble(x = sf::st_coordinates(peaks)[, 1], y = sf::st_coordinates(peaks)[, 2], ele = peaks$ele)
 
-  results <- parallel::mclapply(seq_len(nrow(peaks)), function(i) {
+  cl <- parallel::makeCluster(cores)
+  on.exit(parallel::stopCluster(cl), add = TRUE)
+  parallel::clusterExport(cl, c("visible_land", "GRID_CRS", "MAX_RANGE_M", "EYE_HEIGHT", "CURV_COEF"),
+                          envir = globalenv())
+  parallel::clusterCall(cl, function(memfrac, dem_file, all_file, land_file) {
     # By default terra lets every process plan for 60% of RAM; split it instead
-    terra::terraOptions(memfrac = 0.5 / cores, progress = 0)
-    dem <- terra::rast(dem_file); norway <- terra::rast(land_file)
-    r <- visible_land(xy[i, 1], xy[i, 2], peaks$ele[i], dem, norway)
-    c(area_km2 = r$area_km2, max_dist_km = r$max_dist_km)
-  }, mc.cores = cores)
+    terra::terraOptions(memfrac = memfrac, progress = 0)
+    assign("dem", terra::rast(dem_file), envir = globalenv())
+    assign("land", terra::rast(all_file), envir = globalenv())
+    assign("norway", terra::rast(land_file), envir = globalenv())
+    NULL
+  }, 0.5 / cores, dem_file, all_file, land_file)
+
+  results <- parallel::parLapply(cl, split(jobs, seq_len(nrow(jobs))), function(j) {
+    r <- visible_land(j$x, j$y, j$ele, dem, land, norway)
+    c(area_km2 = r$area_km2, area_norway_km2 = r$area_norway_km2, max_dist_km = r$max_dist_km)
+  })
 
   dplyr::bind_cols(peaks, dplyr::bind_rows(results))
 }

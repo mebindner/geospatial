@@ -13,21 +13,23 @@ TEXT_MAIN  <- "white"
 TEXT_SOFT  <- "#d3d9de"
 TEXT_FAINT <- "#9aa5ae"
 GOLD       <- "#ffcc6b"
+SWEDEN_BLUE <- "#8fd1ff"
 FONT       <- "Helvetica"
 
 #' Source lines for the bottom of every frame; the exaggeration is passed in so
 #' the stated value always matches the one used to render.
 source_lines <- function(exaggeration) c(
-  "Terrain: Kartverket DTM (CC BY 4.0), Copernicus DEM GLO-90 outside Norway. Summits: OpenStreetMap (ODbL).",
-  paste0("Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0). Earth curvature and refraction included. ",
-         "Terrain exaggerated ", exaggeration, "×.")
+  "Terrain: Kartverket DTM, Copernicus DEM GLO-90. Summits: OpenStreetMap. Borders: geoBoundaries. Imagery: Sentinel-2 cloudless 2016 (EOX).",
+  paste0("Line of sight from 1.7 m above each summit, with Earth curvature and refraction, 100 m terrain model. ",
+         "Terrain exaggerated ", exaggeration, "\u00d7.")
 )
 
 #' Write all text layers onto one rendered frame
 #'
 #' @param file PNG from render_snapshot() (square); overwritten with the 4:5 frame.
 #' @param hook Up to three lines shown from the first frame.
-#' @param area_km2 Visible land revealed so far.
+#' @param area_km2 Visible land revealed so far (any country).
+#' @param area_swe_km2 The part of it that lies in Sweden.
 #' @param radius_km Current reveal distance (NULL hides it).
 #' @param summit list(label, pos) with pos = window position c(x, y), 0-1, y up.
 #' @param marks List of landmarks: list(label, pos, alpha).
@@ -35,8 +37,9 @@ source_lines <- function(exaggeration) c(
 #' @param ranking Tibble (rank, name, ele, area_km2, highlight) for the end panel.
 #' @param panel_alpha 0-1, fade of the end panel.
 #' @param exaggeration Vertical exaggeration used in the render, for the source line.
-annotate_frame <- function(file, hook, area_km2, radius_km, summit, marks, sight, ranking,
-                           panel_alpha, exaggeration) {
+#' @param locator Path to the locator map PNG (see make_locator()), or NULL.
+annotate_frame <- function(file, hook, area_km2, area_swe_km2, radius_km, summit, marks, sight, ranking,
+                           panel_alpha, exaggeration, locator = NULL) {
   shot <- magick::image_read(file)
   sw <- magick::image_info(shot)$width
   sh <- magick::image_info(shot)$height   # can be a few px short of square (screen limit)
@@ -110,19 +113,40 @@ annotate_frame <- function(file, hook, area_km2, radius_km, summit, marks, sight
     ncol = 1))) |>
     magick::image_scale(sprintf("%dx%d!", VIDEO_W, 240))
   img <- magick::image_composite(img, fade, offset = "+0+0")
+  # The same gradient, flipped, under the counter at the bottom
+  img <- magick::image_composite(img, magick::image_flip(magick::image_scale(fade, sprintf("%dx%d!", VIDEO_W, 300))),
+                                 offset = sprintf("+0+%d", VIDEO_H - 300))
   img <- label(img, hook[1], 48, 34, 38, TEXT_MAIN, weight = 700)
   for (k in seq_along(hook)[-1]) img <- label(img, hook[k], 50, 52 + 30 * k, 24, TEXT_SOFT)
 
+  # Locator map, top right under the headline, on a dark panel so it reads over
+  # the close-up landscape in the first seconds
+  if (!is.null(locator)) {
+    loc <- magick::image_read(locator)
+    li  <- magick::image_info(loc)
+    pad <- 10
+    panel <- magick::image_blank(li$width + 2 * pad, li$height + 2 * pad,
+                                 grDevices::adjustcolor(BACKGROUND, alpha.f = 0.7)) |>
+      magick::image_composite(loc, offset = sprintf("+%d+%d", pad, pad))
+    img <- magick::image_composite(img, panel, offset = sprintf("+%d+%d", VIDEO_W - li$width - 2 * pad - 36, 108))
+  }
+
   # Bottom band: counter (left) and legend (right)
-  yb <- 1198   # just below the rendered scene (the window comes out ~1050 px tall)
-  img <- label(img, paste0(format(round(area_km2), big.mark = ","), " km²"), 48, yb, 54, GOLD, weight = 700)
-  sub <- if (is.null(radius_km)) "of Norwegian land in sight" else
-    paste0("of Norwegian land in sight, looking out to ", round(radius_km), " km")
+  yb <- 1128   # below the rendered scene, leaving room for three lines above the sources
+  img <- label(img, paste0(format(round(area_km2), big.mark = ","), " km\u00b2"), 48, yb, 54, GOLD, weight = 700)
+  sub <- if (is.null(radius_km)) "of land in sight" else
+    paste0("of land in sight, looking out to ", round(radius_km), " km")
   img <- label(img, sub, 50, yb + 62, 21, TEXT_SOFT)
-  img <- magick::image_composite(img, magick::image_blank(16, 16, GOLD), offset = sprintf("+%d+%d", 800, yb + 14))
-  img <- label(img, "visible from the summit", 824, yb + 11, 18, TEXT_SOFT)
-  img <- magick::image_composite(img, magick::image_blank(16, 16, "#3a4148"), offset = sprintf("+%d+%d", 800, yb + 42))
-  img <- label(img, "hidden by terrain", 824, yb + 39, 18, TEXT_SOFT)
+  if (area_swe_km2 >= 1) {
+    img <- label(img, paste0("of which ", format(round(area_swe_km2), big.mark = ","), " km\u00b2 in Sweden"),
+                 50, yb + 90, 19, SWEDEN_BLUE)
+  }
+  legend <- list(c(GOLD, "visible, in Norway"), c(SWEDEN_BLUE, "visible, in Sweden"), c("#3a4148", "hidden by terrain"))
+  for (k in seq_along(legend)) {
+    img <- magick::image_composite(img, magick::image_blank(16, 16, legend[[k]][1]),
+                                   offset = sprintf("+%d+%d", 800, yb + 6 + 28 * (k - 1)))
+    img <- label(img, legend[[k]][2], 824, yb + 3 + 28 * (k - 1), 18, TEXT_SOFT)
+  }
 
   # End panel: ranking, lower right of the scene
   if (panel_alpha > 0 && !is.null(ranking)) {
@@ -130,7 +154,7 @@ annotate_frame <- function(file, hook, area_km2, radius_km, summit, marks, sight
     x0 <- 640; y0 <- SCENE_Y0 + VIDEO_W - 330
     panel_bg <- magick::image_blank(420, 290, grDevices::adjustcolor(BACKGROUND, alpha.f = 0.75 * panel_alpha))
     img <- magick::image_composite(img, panel_bg, offset = sprintf("+%d+%d", x0 - 16, y0 - 14))
-    img <- label(img, "Widest views in Norway", x0, y0, 22, a(TEXT_MAIN), weight = 700)
+    img <- label(img, "Widest views in Norway, km\u00b2 in sight", x0, y0, 21, a(TEXT_MAIN), weight = 700)
     max_area <- max(ranking$area_km2)
     for (i in seq_len(nrow(ranking))) {
       row <- ranking[i, ]
