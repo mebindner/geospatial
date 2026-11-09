@@ -10,6 +10,7 @@ Developed with AI-assisted coding (Claude). Problem framing, methodology, valida
 |---|---------|--------|--------|
 | 2 | Norway's fjords in 3D with sea lice on top | [`02-fjords-sea-lice/`](02-fjords-sea-lice/) | Done: Sognefjord 2026, weeks 18–42 |
 | 6 | Norway's widest view: which summit sees the most land? | [`06-widest-view/`](06-widest-view/) | Done: Midtre Sølen, 6,685 km² of land in sight |
+| 7 | Fewer frost days in Denmark | [`07-frost-days/`](07-frost-days/) | Done: half as many frost days since 1976 |
 | 1 | Denmark at +1 and +2 metres of sea level rise | – | Planned |
 | 3 | How far does public money travel? | – | Planned |
 | 4 | Denmark from space: greener or greyer? | – | Planned |
@@ -36,5 +37,6 @@ README.md        data, method and limitations
 - **Code:** [MIT](LICENSE).
 - **Images and videos** in `output/` folders: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). You may share and adapt them, including commercially, as long as you credit Martin Eckberg Bindner and link to this repository.
 - **Data** belongs to the sources named in each project and keeps their licences.
+- **Exception:** the images in `07-frost-days/output/` are built from ECA&D and E-OBS data, which may only be used for non-commercial research and education. Those images may be shared and adapted with credit, but not used commercially.
 
 If you use this in your own work, a link back is appreciated.
